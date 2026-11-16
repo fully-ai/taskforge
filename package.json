@@ -1,0 +1,29 @@
+{
+  "name": "taskforge",
+  "version": "0.1.0",
+  "description": "Self-hosted Kanban project and task management platform with SQLite migrations, RBAC, activity history, and notifications.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate": "tsc && node dist/migrate.js",
+    "lint": "tsc --noEmit",
+    "test": "tsc && node --test tests/taskforge.test.mjs"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
