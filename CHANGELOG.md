@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-11-16
+
+### Added
+- Interactive Kanban UI controls for moving tasks across columns, searching tasks, viewing activity logs, and reading notifications.
+- Integration tests for column filtering and due-date/title updates.
+- Comprehensive README with Mermaid diagram, API documentation, and migration reference.
+
 ## [0.1.0] - 2026-11-16
 
 ### Added

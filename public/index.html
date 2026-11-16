@@ -13,30 +13,44 @@
     .task { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
     input, select, button { padding: 7px 10px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; }
     button { background: #2f81f7; border: none; cursor: pointer; font-weight: 600; }
+    button.btn-ghost { background: #21262d; border: 1px solid #30363d; }
+    button.btn-sm { padding: 3px 7px; font-size: 0.78rem; }
     .prio-urgent { border-left: 4px solid #f85149; }
     .prio-high { border-left: 4px solid #d29922; }
+    .pill { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; margin-right: 4px; background: #30363d; }
   </style>
 </head>
 <body>
-  <h1>TaskForge</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h1>TaskForge</h1>
+    <div id="notif-badge" class="hidden"><button class="btn-ghost" onclick="toggleNotifications()">Notifications (<span id="notif-count">0</span>)</button></div>
+  </div>
   <div id="auth" class="card">
     <input id="u" placeholder="Username" />
     <input id="p" type="password" placeholder="Password" />
     <button onclick="login('/api/auth/login')">Sign In</button>
-    <button onclick="login('/api/auth/register')">Register</button>
+    <button class="btn-ghost" onclick="login('/api/auth/register')">Register</button>
   </div>
   <div id="workspace" class="hidden">
-    <div class="card">
+    <div id="notif-drawer" class="card hidden"><strong>Notifications</strong><ul id="notif-list"></ul></div>
+    <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <select id="proj" onchange="loadBoard()"></select>
-      <button onclick="createProject()">+ Project</button>
+      <button class="btn-ghost" onclick="createProject()">+ Project</button>
       <input id="task-title" placeholder="New task title" />
       <select id="task-prio"><option>low</option><option selected>medium</option><option>high</option><option>urgent</option></select>
+      <input id="task-due" type="date" />
       <button onclick="createTask()">Add Task</button>
+      <input id="search-q" placeholder="Search tasks..." oninput="loadBoard()" />
     </div>
     <div id="board" class="board"></div>
+    <div class="card" style="margin-top:16px;">
+      <strong>Recent Project Activity</strong>
+      <ul id="activity-list" style="font-size:0.86rem;color:#8b949e;padding-left:18px;"></ul>
+    </div>
   </div>
   <script>
     let token = localStorage.getItem('tf_token') || '';
+    const COLS = ['backlog', 'in_progress', 'review', 'done'];
     async function api(url, opts = {}) {
       const headers = { ...(opts.headers || {}) };
       if (token) headers.Authorization = 'Bearer ' + token;
@@ -55,6 +69,7 @@
     async function initWorkspace() {
       document.getElementById('auth').classList.add('hidden');
       document.getElementById('workspace').classList.remove('hidden');
+      document.getElementById('notif-badge').classList.remove('hidden');
       const { projects } = await api('/api/projects');
       const sel = document.getElementById('proj');
       sel.innerHTML = '';
@@ -63,8 +78,17 @@
         o.value = p.id; o.textContent = `${p.key} — ${p.name}`;
         sel.appendChild(o);
       }
+      await loadNotifications();
       if (projects.length) await loadBoard();
     }
+    async function loadNotifications() {
+      const { notifications } = await api('/api/notifications');
+      const unread = notifications.filter(n => !n.is_read);
+      document.getElementById('notif-count').textContent = unread.length;
+      document.getElementById('notif-list').innerHTML = notifications.map(n => `<li>${n.message} ${n.is_read?'':'<button class="btn-sm" onclick="markRead(\''+n.id+'\')">Mark Read</button>'}</li>`).join('');
+    }
+    async function markRead(id) { await api(`/api/notifications/${id}/read`, { method: 'POST' }); await loadNotifications(); }
+    function toggleNotifications() { document.getElementById('notif-drawer').classList.toggle('hidden'); }
     async function createProject() {
       const key = prompt('Project key (e.g. CORE):');
       const name = prompt('Project name:');
@@ -74,21 +98,33 @@
     }
     async function loadBoard() {
       const pid = document.getElementById('proj').value;
-      const data = await api(`/api/projects/${pid}/board`);
+      const q = document.getElementById('search-q').value.trim();
+      const boardData = await api(`/api/projects/${pid}/board`);
+      const tasks = q ? (await api(`/api/projects/${pid}/tasks?q=${encodeURIComponent(q)}`)).tasks : boardData.tasks;
       const board = document.getElementById('board');
       board.innerHTML = '';
-      for (const col of data.columns) {
+      for (const col of boardData.columns) {
         const div = document.createElement('div');
         div.className = 'col';
         div.innerHTML = `<h3>${col.name}</h3>`;
-        for (const t of data.tasks.filter(x => x.column_name === col.name)) {
+        const colIdx = COLS.indexOf(col.name);
+        for (const t of tasks.filter(x => x.column_name === col.name)) {
           const card = document.createElement('div');
           card.className = `task prio-${t.priority}`;
-          card.innerHTML = `<strong>${t.title}</strong><div><small>${t.priority}</small></div>`;
+          const labels = (t.labels||[]).map(l => `<span class="pill">${l.name}</span>`).join('');
+          const prevBtn = colIdx > 0 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${t.id}','${COLS[colIdx-1]}')">←</button>` : '';
+          const nextBtn = colIdx >= 0 && colIdx < COLS.length - 1 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${t.id}','${COLS[colIdx+1]}')">→</button>` : '';
+          card.innerHTML = `<strong>${t.title}</strong><div><small>${t.priority}${t.due_date ? ' • due ' + t.due_date : ''}</small></div><div>${labels}</div><div style="margin-top:6px;display:flex;gap:6px;">${prevBtn}${nextBtn}</div>`;
           div.appendChild(card);
         }
         board.appendChild(div);
       }
+      const { activity } = await api(`/api/projects/${pid}/activity`);
+      document.getElementById('activity-list').innerHTML = (activity || []).slice(0, 10).map(a => `<li>${a.created_at}: ${a.details}</li>`).join('');
+    }
+    async function moveTask(id, col) {
+      await api(`/api/tasks/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ column_name: col }) });
+      await loadBoard();
     }
     async function createTask() {
       const pid = document.getElementById('proj').value;
@@ -96,7 +132,7 @@
       if (!pid || !title) return;
       await api(`/api/projects/${pid}/tasks`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, priority: document.getElementById('task-prio').value })
+        body: JSON.stringify({ title, priority: document.getElementById('task-prio').value, due_date: document.getElementById('task-due').value || null })
       });
       document.getElementById('task-title').value = '';
       await loadBoard();

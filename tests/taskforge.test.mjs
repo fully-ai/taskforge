@@ -103,4 +103,17 @@ test("migrations, project board, labels, Kanban transitions, search, activity, a
     headers: h2,
   });
   assert.equal(markRes.status, 200);
+
+  // Filter by column and update due date / title
+  const inProg = await fetch(`${baseUrl}/api/projects/${proj.id}/tasks?column=in_progress`, { headers: h1 }).then((r) =>
+    r.json()
+  );
+  assert.equal(inProg.tasks.length, 1);
+  const edited = await fetch(`${baseUrl}/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: h1,
+    body: JSON.stringify({ title: "Implement login rate limiter", due_date: "2026-12-15" }),
+  }).then((r) => r.json());
+  assert.equal(edited.title, "Implement login rate limiter");
+  assert.equal(edited.due_date, "2026-12-15");
 });
