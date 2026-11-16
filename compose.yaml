@@ -1,0 +1,16 @@
+services:
+  taskforge:
+    build: .
+    ports:
+      - "3100:3100"
+    environment:
+      TASKFORGE_HOST: "0.0.0.0"
+      TASKFORGE_PORT: "3100"
+      TASKFORGE_DATA_DIR: "/data"
+      TASKFORGE_JWT_SECRET: "${TASKFORGE_JWT_SECRET:-change-me-in-production}"
+    volumes:
+      - taskforge_data:/data
+    restart: unless-stopped
+
+volumes:
+  taskforge_data:
