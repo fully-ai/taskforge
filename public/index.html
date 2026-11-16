@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaskForge — Kanban Project Management</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; padding: 20px; }
+    .hidden { display: none !important; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+    .board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 14px; margin-top: 14px; }
+    .col { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; min-height: 320px; }
+    .task { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+    input, select, button { padding: 7px 10px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; }
+    button { background: #2f81f7; border: none; cursor: pointer; font-weight: 600; }
+    .prio-urgent { border-left: 4px solid #f85149; }
+    .prio-high { border-left: 4px solid #d29922; }
+  </style>
+</head>
+<body>
+  <h1>TaskForge</h1>
+  <div id="auth" class="card">
+    <input id="u" placeholder="Username" />
+    <input id="p" type="password" placeholder="Password" />
+    <button onclick="login('/api/auth/login')">Sign In</button>
+    <button onclick="login('/api/auth/register')">Register</button>
+  </div>
+  <div id="workspace" class="hidden">
+    <div class="card">
+      <select id="proj" onchange="loadBoard()"></select>
+      <button onclick="createProject()">+ Project</button>
+      <input id="task-title" placeholder="New task title" />
+      <select id="task-prio"><option>low</option><option selected>medium</option><option>high</option><option>urgent</option></select>
+      <button onclick="createTask()">Add Task</button>
+    </div>
+    <div id="board" class="board"></div>
+  </div>
+  <script>
+    let token = localStorage.getItem('tf_token') || '';
+    async function api(url, opts = {}) {
+      const headers = { ...(opts.headers || {}) };
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const r = await fetch(url, { ...opts, headers });
+      if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || 'Error');
+      return r.json();
+    }
+    async function login(ep) {
+      const res = await api(ep, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value })
+      });
+      token = res.token; localStorage.setItem('tf_token', token);
+      await initWorkspace();
+    }
+    async function initWorkspace() {
+      document.getElementById('auth').classList.add('hidden');
+      document.getElementById('workspace').classList.remove('hidden');
+      const { projects } = await api('/api/projects');
+      const sel = document.getElementById('proj');
+      sel.innerHTML = '';
+      for (const p of projects) {
+        const o = document.createElement('option');
+        o.value = p.id; o.textContent = `${p.key} — ${p.name}`;
+        sel.appendChild(o);
+      }
+      if (projects.length) await loadBoard();
+    }
+    async function createProject() {
+      const key = prompt('Project key (e.g. CORE):');
+      const name = prompt('Project name:');
+      if (!key || !name) return;
+      await api('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, name }) });
+      await initWorkspace();
+    }
+    async function loadBoard() {
+      const pid = document.getElementById('proj').value;
+      const data = await api(`/api/projects/${pid}/board`);
+      const board = document.getElementById('board');
+      board.innerHTML = '';
+      for (const col of data.columns) {
+        const div = document.createElement('div');
+        div.className = 'col';
+        div.innerHTML = `<h3>${col.name}</h3>`;
+        for (const t of data.tasks.filter(x => x.column_name === col.name)) {
+          const card = document.createElement('div');
+          card.className = `task prio-${t.priority}`;
+          card.innerHTML = `<strong>${t.title}</strong><div><small>${t.priority}</small></div>`;
+          div.appendChild(card);
+        }
+        board.appendChild(div);
+      }
+    }
+    async function createTask() {
+      const pid = document.getElementById('proj').value;
+      const title = document.getElementById('task-title').value;
+      if (!pid || !title) return;
+      await api(`/api/projects/${pid}/tasks`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, priority: document.getElementById('task-prio').value })
+      });
+      document.getElementById('task-title').value = '';
+      await loadBoard();
+    }
+    if (token) initWorkspace().catch(() => { token = ''; localStorage.removeItem('tf_token'); });
+  </script>
+</body>
+</html>
