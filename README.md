@@ -10,7 +10,18 @@ Many self-hosted project trackers require heavy external databases or complex mi
 
 - **Versioned SQL Migrations**: Incremental migration runner (`migrations/*.sql`) tracked in `schema_migrations` inside transactions.
 - **Projects & Kanban Workflow**: Auto-provisions `backlog`, `in_progress`, `review`, and `done` columns per project with instant task transitions.
-- **Task Metadata & Search**: Supports priorities (`low`, `medium`, `high`, `urgent`), due dates, assignees, colored labels, and combined query filtering (`q`, `priority`, `column`, `label`).
+- **Task Metadata & Search**: Supports priorities (`low`, `medium`, `high`, `urgent`), due dates, overdue filtering (`?overdue=true`), assignees, colored labels, and combined query filtering (`q`, `priority`, `column`, `label`).
+- **Comments, Checklists & Export**: Persistent task comments, subtask checklists (`GET /api/tasks/:id`, `POST /api/tasks/:id/subtasks`, `POST /api/tasks/:id/comments`), and formula-safe CSV/JSON export (`/api/projects/:id/export`).
+
+## Quick Start
+
+1. **Requirements**: Node.js 22.5+
+2. **Clone**: `git clone https://github.com/fully-ai/taskforge.git && cd taskforge`
+3. **Install & Build**: `./scripts/install.sh` (Windows: `.\scripts\install.ps1`)
+4. **Configure**: Copy `.env.example` to `.env` if customizing `TASKFORGE_JWT_SECRET` or `TASKFORGE_PORT`
+5. **Start**: `./scripts/dev.sh` (Windows: `.\scripts\dev.ps1`)
+6. **Open**: `http://127.0.0.1:3100`
+7. **Run Tests**: `./scripts/test.sh` (Windows: `.\scripts\test.ps1`)
 - **Activity History & Notifications**: Automatically logs project/task mutations in `activity_logs` and delivers assignment notifications with read tracking.
 - **Security & Docker Compose**: Scrypt password hashing, JWT authentication, Helmet HTTP headers, and persistent `/data` Docker volumes.
 

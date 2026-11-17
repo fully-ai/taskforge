@@ -172,10 +172,25 @@ export class TaskForgeDB {
          WHERE tl.task_id = ?`
       )
       .all(id);
-    return { ...task, labels };
+    const subStats = this.db
+      .prepare("SELECT COUNT(*) as total, COALESCE(SUM(completed), 0) as done FROM task_subtasks WHERE task_id = ?")
+      .get(id) as { total: number; done: number };
+    const commentStats = this.db
+      .prepare("SELECT COUNT(*) as total FROM task_comments WHERE task_id = ?")
+      .get(id) as { total: number };
+    return {
+      ...task,
+      labels,
+      subtasks_total: subStats.total,
+      subtasks_done: subStats.done,
+      comments_count: commentStats.total,
+    };
   }
 
-  searchTasks(projectId: string, opts: { q?: string; priority?: string; column?: string; label?: string }) {
+  searchTasks(
+    projectId: string,
+    opts: { q?: string; priority?: string; column?: string; label?: string; overdue?: boolean }
+  ) {
     let sql = `SELECT DISTINCT t.* FROM tasks t`;
     const params: string[] = [];
     if (opts.label) {
@@ -200,6 +215,11 @@ export class TaskForgeDB {
     if (opts.label) {
       sql += ` AND l.name = ?`;
       params.push(opts.label);
+    }
+    if (opts.overdue) {
+      const today = new Date().toISOString().slice(0, 10);
+      sql += ` AND t.due_date IS NOT NULL AND t.due_date < ? AND t.column_name != 'done'`;
+      params.push(today);
     }
     sql += ` ORDER BY t.updated_at DESC`;
     const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
@@ -281,5 +301,122 @@ export class TaskForgeDB {
   markNotificationRead(id: string, userId: string): boolean {
     const res = this.db.prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?").run(id, userId);
     return res.changes > 0;
+  }
+
+  listComments(taskId: string) {
+    return this.db
+      .prepare(
+        `SELECT c.*, u.username as author_username FROM task_comments c
+         JOIN users u ON u.id = c.author_id
+         WHERE c.task_id = ? ORDER BY c.created_at ASC`
+      )
+      .all(taskId);
+  }
+
+  addComment(taskId: string, authorId: string, body: string) {
+    const task = this.db.prepare("SELECT project_id, title FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id: string; title: string }
+      | undefined;
+    if (!task) return undefined;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.db
+      .prepare("INSERT INTO task_comments (id, task_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(id, taskId, authorId, body, now);
+    this.logActivity(task.project_id, taskId, authorId, "add_comment", `Commented on "${task.title}"`);
+    return this.db
+      .prepare(
+        `SELECT c.*, u.username as author_username FROM task_comments c
+         JOIN users u ON u.id = c.author_id WHERE c.id = ?`
+      )
+      .get(id);
+  }
+
+  deleteComment(commentId: string, actorId: string, isAdmin: boolean): boolean {
+    const row = this.db.prepare("SELECT author_id FROM task_comments WHERE id = ?").get(commentId) as
+      | { author_id: string }
+      | undefined;
+    if (!row) return false;
+    if (!isAdmin && row.author_id !== actorId) {
+      throw new Error("FORBIDDEN");
+    }
+    const res = this.db.prepare("DELETE FROM task_comments WHERE id = ?").run(commentId);
+    return res.changes > 0;
+  }
+
+  listSubtasks(taskId: string) {
+    return this.db
+      .prepare("SELECT * FROM task_subtasks WHERE task_id = ? ORDER BY position ASC, created_at ASC")
+      .all(taskId);
+  }
+
+  addSubtask(taskId: string, actorId: string, title: string) {
+    const task = this.db.prepare("SELECT project_id, title FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id: string; title: string }
+      | undefined;
+    if (!task) return undefined;
+    const maxPos = (
+      this.db.prepare("SELECT COALESCE(MAX(position), -1) as p FROM task_subtasks WHERE task_id = ?").get(taskId) as {
+        p: number;
+      }
+    ).p;
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.db
+      .prepare("INSERT INTO task_subtasks (id, task_id, title, completed, position, created_at) VALUES (?, ?, ?, 0, ?, ?)")
+      .run(id, taskId, title, maxPos + 1, now);
+    this.logActivity(task.project_id, taskId, actorId, "add_subtask", `Added checklist item "${title}" on "${task.title}"`);
+    return this.db.prepare("SELECT * FROM task_subtasks WHERE id = ?").get(id);
+  }
+
+  updateSubtask(subtaskId: string, updates: { title?: string; completed?: boolean }) {
+    const existing = this.db.prepare("SELECT * FROM task_subtasks WHERE id = ?").get(subtaskId) as
+      | { id: string; title: string; completed: number }
+      | undefined;
+    if (!existing) return undefined;
+    const title = updates.title !== undefined ? updates.title : existing.title;
+    const completed = updates.completed !== undefined ? (updates.completed ? 1 : 0) : existing.completed;
+    this.db.prepare("UPDATE task_subtasks SET title = ?, completed = ? WHERE id = ?").run(title, completed, subtaskId);
+    return this.db.prepare("SELECT * FROM task_subtasks WHERE id = ?").get(subtaskId);
+  }
+
+  deleteSubtask(subtaskId: string): boolean {
+    return this.db.prepare("DELETE FROM task_subtasks WHERE id = ?").run(subtaskId).changes > 0;
+  }
+
+  exportProjectCsv(projectId: string): string {
+    const escapeCell = (val: unknown): string => {
+      let s = String(val ?? "");
+      if (/^[=+\-@\t\r]/.test(s)) {
+        s = "'" + s;
+      }
+      if (/[",\n\r]/.test(s)) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+    const tasks = this.searchTasks(projectId, {});
+    const header = ["id", "title", "column_name", "priority", "due_date", "labels", "subtasks_done", "subtasks_total"];
+    const lines = [header.join(",")];
+    for (const t of tasks as Array<Record<string, unknown>>) {
+      const labelNames = Array.isArray(t.labels)
+        ? (t.labels as Array<{ name: string }>).map((l) => l.name).join(";")
+        : "";
+      lines.push(
+        [
+          t.id,
+          t.title,
+          t.column_name,
+          t.priority,
+          t.due_date ?? "",
+          labelNames,
+          t.subtasks_done ?? 0,
+          t.subtasks_total ?? 0,
+        ]
+          .map(escapeCell)
+          .join(",")
+      );
+    }
+    return lines.join("\n") + "\n";
   }
 }

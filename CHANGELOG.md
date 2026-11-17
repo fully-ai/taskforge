@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-11-18
+
+### Added
+- **Migration `003_comments_subtasks.sql`**: Persistent `task_comments` and `task_subtasks` tables with indexes.
+- **Task Detail Modal, Comments & Checklists**: `GET /api/tasks/:taskId`, comments CRUD with ownership/admin enforcement, and subtask creation/toggle/deletion logged to activity history.
+- **Overdue Filter & Formula-Safe CSV/JSON Export**: `?overdue=true` filtering, overdue board badges, and `GET /api/projects/:id/export?format=csv|json`.
+- **Security & Tooling**: Escaped UI rendering (`esc()`), plus `scripts/{install,dev,test}.{sh,ps1}`.
+
 ## [0.2.0] - 2026-11-16
 
 ### Added

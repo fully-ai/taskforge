@@ -1,6 +1,6 @@
 {
   "name": "taskforge",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Self-hosted Kanban project and task management platform with SQLite migrations, RBAC, activity history, and notifications.",
   "type": "module",
   "main": "dist/server.js",

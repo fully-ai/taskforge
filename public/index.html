@@ -11,13 +11,17 @@
     .board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 14px; margin-top: 14px; }
     .col { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; min-height: 320px; }
     .task { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
-    input, select, button { padding: 7px 10px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; }
+    input, select, button, textarea { padding: 7px 10px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; }
     button { background: #2f81f7; border: none; cursor: pointer; font-weight: 600; }
     button.btn-ghost { background: #21262d; border: 1px solid #30363d; }
     button.btn-sm { padding: 3px 7px; font-size: 0.78rem; }
     .prio-urgent { border-left: 4px solid #f85149; }
     .prio-high { border-left: 4px solid #d29922; }
     .pill { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.72rem; margin-right: 4px; background: #30363d; }
+    .pill-overdue { background: #7f1d1d; color: #fecaca; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.68); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+    .modal { background: #161b22; border: 1px solid #30363d; border-radius: 10px; max-width: 640px; width: 100%; max-height: 85vh; overflow-y: auto; padding: 20px; }
+    .subtask-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
   </style>
 </head>
 <body>
@@ -41,6 +45,8 @@
       <input id="task-due" type="date" />
       <button onclick="createTask()">Add Task</button>
       <input id="search-q" placeholder="Search tasks..." oninput="loadBoard()" />
+      <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px;"><input id="only-overdue" type="checkbox" onchange="loadBoard()" /> Overdue only</label>
+      <button class="btn-ghost" onclick="exportCsv()">Export CSV</button>
     </div>
     <div id="board" class="board"></div>
     <div class="card" style="margin-top:16px;">
@@ -48,9 +54,37 @@
       <ul id="activity-list" style="font-size:0.86rem;color:#8b949e;padding-left:18px;"></ul>
     </div>
   </div>
+
+  <div id="task-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 id="modal-title" style="margin:0;">Task</h2>
+        <button class="btn-ghost btn-sm" onclick="closeModal()">Close</button>
+      </div>
+      <p id="modal-meta" style="color:#8b949e;font-size:0.85rem;"></p>
+      <p id="modal-desc"></p>
+      <h3>Checklist</h3>
+      <div id="modal-subtasks"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <input id="new-subtask" placeholder="Add checklist item..." style="flex:1;" />
+        <button onclick="addSubtask()">Add</button>
+      </div>
+      <h3 style="margin-top:18px;">Comments</h3>
+      <div id="modal-comments"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <input id="new-comment" placeholder="Write a comment..." style="flex:1;" />
+        <button onclick="addComment()">Comment</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let token = localStorage.getItem('tf_token') || '';
+    let activeTaskId = '';
     const COLS = ['backlog', 'in_progress', 'review', 'done'];
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
     async function api(url, opts = {}) {
       const headers = { ...(opts.headers || {}) };
       if (token) headers.Authorization = 'Bearer ' + token;
@@ -85,7 +119,7 @@
       const { notifications } = await api('/api/notifications');
       const unread = notifications.filter(n => !n.is_read);
       document.getElementById('notif-count').textContent = unread.length;
-      document.getElementById('notif-list').innerHTML = notifications.map(n => `<li>${n.message} ${n.is_read?'':'<button class="btn-sm" onclick="markRead(\''+n.id+'\')">Mark Read</button>'}</li>`).join('');
+      document.getElementById('notif-list').innerHTML = notifications.map(n => `<li>${esc(n.message)} ${n.is_read?'':'<button class="btn-sm" onclick="markRead(\''+esc(n.id)+'\')">Mark Read</button>'}</li>`).join('');
     }
     async function markRead(id) { await api(`/api/notifications/${id}/read`, { method: 'POST' }); await loadNotifications(); }
     function toggleNotifications() { document.getElementById('notif-drawer').classList.toggle('hidden'); }
@@ -99,28 +133,72 @@
     async function loadBoard() {
       const pid = document.getElementById('proj').value;
       const q = document.getElementById('search-q').value.trim();
+      const overdue = document.getElementById('only-overdue').checked;
       const boardData = await api(`/api/projects/${pid}/board`);
-      const tasks = q ? (await api(`/api/projects/${pid}/tasks?q=${encodeURIComponent(q)}`)).tasks : boardData.tasks;
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (overdue) params.set('overdue', 'true');
+      const tasks = (q || overdue) ? (await api(`/api/projects/${pid}/tasks?${params}`)).tasks : boardData.tasks;
+      const today = new Date().toISOString().slice(0, 10);
       const board = document.getElementById('board');
       board.innerHTML = '';
       for (const col of boardData.columns) {
         const div = document.createElement('div');
         div.className = 'col';
-        div.innerHTML = `<h3>${col.name}</h3>`;
+        div.innerHTML = `<h3>${esc(col.name)}</h3>`;
         const colIdx = COLS.indexOf(col.name);
         for (const t of tasks.filter(x => x.column_name === col.name)) {
           const card = document.createElement('div');
-          card.className = `task prio-${t.priority}`;
-          const labels = (t.labels||[]).map(l => `<span class="pill">${l.name}</span>`).join('');
-          const prevBtn = colIdx > 0 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${t.id}','${COLS[colIdx-1]}')">←</button>` : '';
-          const nextBtn = colIdx >= 0 && colIdx < COLS.length - 1 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${t.id}','${COLS[colIdx+1]}')">→</button>` : '';
-          card.innerHTML = `<strong>${t.title}</strong><div><small>${t.priority}${t.due_date ? ' • due ' + t.due_date : ''}</small></div><div>${labels}</div><div style="margin-top:6px;display:flex;gap:6px;">${prevBtn}${nextBtn}</div>`;
+          card.className = `task prio-${esc(t.priority)}`;
+          const isOverdue = t.due_date && t.due_date < today && t.column_name !== 'done';
+          const labels = (t.labels||[]).map(l => `<span class="pill">${esc(l.name)}</span>`).join('');
+          const overduePill = isOverdue ? `<span class="pill pill-overdue">OVERDUE</span>` : '';
+          const checkMeta = t.subtasks_total ? ` • ☑ ${t.subtasks_done}/${t.subtasks_total}` : '';
+          const commentMeta = t.comments_count ? ` • 💬 ${t.comments_count}` : '';
+          const prevBtn = colIdx > 0 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${esc(t.id)}','${COLS[colIdx-1]}')">←</button>` : '';
+          const nextBtn = colIdx >= 0 && colIdx < COLS.length - 1 ? `<button class="btn-ghost btn-sm" onclick="moveTask('${esc(t.id)}','${COLS[colIdx+1]}')">→</button>` : '';
+          card.innerHTML = `<strong>${esc(t.title)}</strong><div><small>${esc(t.priority)}${t.due_date ? ' • due ' + esc(t.due_date) : ''}${checkMeta}${commentMeta}</small></div><div>${overduePill}${labels}</div><div style="margin-top:6px;display:flex;gap:6px;">${prevBtn}${nextBtn}<button class="btn-ghost btn-sm" onclick="openTask('${esc(t.id)}')">Details</button></div>`;
           div.appendChild(card);
         }
         board.appendChild(div);
       }
       const { activity } = await api(`/api/projects/${pid}/activity`);
-      document.getElementById('activity-list').innerHTML = (activity || []).slice(0, 10).map(a => `<li>${a.created_at}: ${a.details}</li>`).join('');
+      document.getElementById('activity-list').innerHTML = (activity || []).slice(0, 10).map(a => `<li>${esc(a.created_at)}: ${esc(a.details)}</li>`).join('');
+    }
+    async function openTask(id) {
+      activeTaskId = id;
+      const data = await api(`/api/tasks/${id}`);
+      document.getElementById('modal-title').textContent = data.task.title;
+      document.getElementById('modal-meta').textContent = `${data.task.column_name} • ${data.task.priority}${data.task.due_date ? ' • due ' + data.task.due_date : ''}`;
+      document.getElementById('modal-desc').textContent = data.task.description || 'No description.';
+      document.getElementById('modal-subtasks').innerHTML = data.subtasks.map(s => `<div class="subtask-row"><input type="checkbox" ${s.completed?'checked':''} onchange="toggleSubtask('${esc(s.id)}', this.checked)" /><span>${esc(s.title)}</span></div>`).join('') || '<small style="color:#8b949e">No checklist items.</small>';
+      document.getElementById('modal-comments').innerHTML = data.comments.map(c => `<div style="border-top:1px solid #30363d;padding:6px 0;"><small><b>${esc(c.author_username)}</b> • ${esc(c.created_at)}</small><div>${esc(c.body)}</div></div>`).join('') || '<small style="color:#8b949e">No comments yet.</small>';
+      document.getElementById('task-modal').classList.remove('hidden');
+    }
+    function closeModal() { document.getElementById('task-modal').classList.add('hidden'); }
+    async function addSubtask() {
+      const inp = document.getElementById('new-subtask');
+      if (!inp.value.trim()) return;
+      await api(`/api/tasks/${activeTaskId}/subtasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: inp.value.trim() }) });
+      inp.value = ''; await openTask(activeTaskId); await loadBoard();
+    }
+    async function toggleSubtask(id, completed) {
+      await api(`/api/subtasks/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed }) });
+      await loadBoard();
+    }
+    async function addComment() {
+      const inp = document.getElementById('new-comment');
+      if (!inp.value.trim()) return;
+      await api(`/api/tasks/${activeTaskId}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: inp.value.trim() }) });
+      inp.value = ''; await openTask(activeTaskId); await loadBoard();
+    }
+    async function exportCsv() {
+      const pid = document.getElementById('proj').value;
+      const r = await fetch(`/api/projects/${pid}/export?format=csv`, { headers: { Authorization: 'Bearer ' + token } });
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'taskforge-export.csv'; a.click();
+      URL.revokeObjectURL(url);
     }
     async function moveTask(id, col) {
       await api(`/api/tasks/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ column_name: col }) });

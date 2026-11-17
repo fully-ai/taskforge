@@ -116,8 +116,27 @@ export function createTaskForgeApp(opts: { dataDir?: string; jwtSecret?: string 
       priority: typeof req.query.priority === "string" ? req.query.priority : undefined,
       column: typeof req.query.column === "string" ? req.query.column : undefined,
       label: typeof req.query.label === "string" ? req.query.label : undefined,
+      overdue: req.query.overdue === "true",
     });
     res.json({ tasks });
+  });
+
+  app.get("/api/projects/:id/export", auth, (req, res) => {
+    const pid = String(req.params.id);
+    const project = db.getProject(pid);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const format = String(req.query.format ?? "json").toLowerCase();
+    if (format === "csv") {
+      const csv = db.exportProjectCsv(pid);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${String(project.key).toLowerCase()}-tasks.csv"`);
+      res.send(csv);
+      return;
+    }
+    res.json({ project, tasks: db.searchTasks(pid, {}) });
   });
 
   app.post("/api/projects/:id/tasks", auth, (req: AuthedRequest, res) => {
@@ -168,6 +187,84 @@ export function createTaskForgeApp(opts: { dataDir?: string; jwtSecret?: string 
       return;
     }
     res.json(updated);
+  });
+
+  app.get("/api/tasks/:taskId", auth, (req, res) => {
+    const tid = String(req.params.taskId);
+    const task = db.getTask(tid);
+    if (!task) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json({
+      task,
+      comments: db.listComments(tid),
+      subtasks: db.listSubtasks(tid),
+    });
+  });
+
+  app.post("/api/tasks/:taskId/comments", auth, (req: AuthedRequest, res) => {
+    const body = String(req.body?.body ?? "").trim();
+    if (!body || body.length > 2000) {
+      res.status(400).json({ error: "Comment body (1-2000 chars) is required" });
+      return;
+    }
+    const comment = db.addComment(String(req.params.taskId), req.user!.id, body);
+    if (!comment) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.status(201).json(comment);
+  });
+
+  app.delete("/api/comments/:commentId", auth, (req: AuthedRequest, res) => {
+    try {
+      const ok = db.deleteComment(String(req.params.commentId), req.user!.id, req.user!.role === "admin");
+      if (!ok) {
+        res.status(404).json({ error: "Comment not found" });
+        return;
+      }
+      res.json({ status: "deleted" });
+    } catch (err) {
+      if ((err as Error).message === "FORBIDDEN") {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  app.post("/api/tasks/:taskId/subtasks", auth, (req: AuthedRequest, res) => {
+    const title = String(req.body?.title ?? "").trim();
+    if (!title || title.length > 300) {
+      res.status(400).json({ error: "Subtask title (1-300 chars) is required" });
+      return;
+    }
+    const subtask = db.addSubtask(String(req.params.taskId), req.user!.id, title);
+    if (!subtask) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.status(201).json(subtask);
+  });
+
+  app.patch("/api/subtasks/:subtaskId", auth, (req, res) => {
+    const title = req.body?.title !== undefined ? String(req.body.title).trim() : undefined;
+    const completed = req.body?.completed !== undefined ? Boolean(req.body.completed) : undefined;
+    const updated = db.updateSubtask(String(req.params.subtaskId), { title, completed });
+    if (!updated) {
+      res.status(404).json({ error: "Subtask not found" });
+      return;
+    }
+    res.json(updated);
+  });
+
+  app.delete("/api/subtasks/:subtaskId", auth, (req, res) => {
+    if (!db.deleteSubtask(String(req.params.subtaskId))) {
+      res.status(404).json({ error: "Subtask not found" });
+      return;
+    }
+    res.json({ status: "deleted" });
   });
 
   app.get("/api/projects/:id/activity", auth, (req, res) => {

@@ -117,3 +117,75 @@ test("migrations, project board, labels, Kanban transitions, search, activity, a
   assert.equal(edited.title, "Implement login rate limiter");
   assert.equal(edited.due_date, "2026-12-15");
 });
+
+
+test("comments, checklists/subtasks, overdue filtering, and formula-safe CSV export", async () => {
+  const u1 = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "pmuser", password: "password123" }),
+  }).then((r) => r.json());
+  const h1 = { Authorization: `Bearer ${u1.token}`, "Content-Type": "application/json" };
+
+  const proj = await fetch(`${baseUrl}/api/projects`, {
+    method: "POST",
+    headers: h1,
+    body: JSON.stringify({ key: "OPS", name: "Ops Roadmap", description: "Infra tasks" }),
+  }).then((r) => r.json());
+
+  const overdueTask = await fetch(`${baseUrl}/api/projects/${proj.id}/tasks`, {
+    method: "POST",
+    headers: h1,
+    body: JSON.stringify({
+      title: "=HYPERLINK(\"http://evil\")",
+      description: "Test formula neutralization",
+      priority: "high",
+      due_date: "2020-01-01",
+    }),
+  }).then((r) => r.json());
+
+  // Subtasks
+  const st = await fetch(`${baseUrl}/api/tasks/${overdueTask.id}/subtasks`, {
+    method: "POST",
+    headers: h1,
+    body: JSON.stringify({ title: "Verify TLS certificates" }),
+  }).then((r) => r.json());
+  assert.equal(st.completed, 0);
+
+  const toggled = await fetch(`${baseUrl}/api/subtasks/${st.id}`, {
+    method: "PATCH",
+    headers: h1,
+    body: JSON.stringify({ completed: true }),
+  }).then((r) => r.json());
+  assert.equal(toggled.completed, 1);
+
+  // Comments
+  const comment = await fetch(`${baseUrl}/api/tasks/${overdueTask.id}/comments`, {
+    method: "POST",
+    headers: h1,
+    body: JSON.stringify({ body: "Checked staging cluster." }),
+  }).then((r) => r.json());
+  assert.equal(comment.author_username, "pmuser");
+
+  const details = await fetch(`${baseUrl}/api/tasks/${overdueTask.id}`, { headers: h1 }).then((r) => r.json());
+  assert.equal(details.task.subtasks_total, 1);
+  assert.equal(details.task.subtasks_done, 1);
+  assert.equal(details.task.comments_count, 1);
+  assert.equal(details.comments.length, 1);
+
+  // Overdue search filter
+  const overdueRes = await fetch(`${baseUrl}/api/projects/${proj.id}/tasks?overdue=true`, { headers: h1 }).then((r) =>
+    r.json()
+  );
+  assert.equal(overdueRes.tasks.length, 1);
+
+  // CSV export neutralizes leading formula characters
+  const csvRes = await fetch(`${baseUrl}/api/projects/${proj.id}/export?format=csv`, { headers: h1 });
+  assert.equal(csvRes.status, 200);
+  const csvText = await csvRes.text();
+  assert.ok(csvText.includes("'=HYPERLINK("));
+
+  // Delete comment by author succeeds
+  const delRes = await fetch(`${baseUrl}/api/comments/${comment.id}`, { method: "DELETE", headers: h1 });
+  assert.equal(delRes.status, 200);
+});
